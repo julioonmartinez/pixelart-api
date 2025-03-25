@@ -1,0 +1,71 @@
+# Archivos de entorno y configuración
+.env
+.env.*
+!.env.example
+*.ini
+config.py
+
+# Archivos de base de datos
+*.db
+*.sqlite
+*.sqlite3
+*.sql
+
+# Directorios virtuales de Python
+venv/
+env/
+ENV/
+virtualenv/
+.venv/
+
+# Archivos de cache de Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Archivos de distribución
+dist/
+build/
+*.egg-info/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Directorios e imágenes generadas
+images/uploads/*
+images/results/*
+!images/uploads/.gitkeep
+!images/results/.gitkeep
+
+# Archivos de IDE y editores
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Archivos temporales
+temp/
+tmp/
+.temp/
+.tmp/
+
+# Archivos de Docker
+.dockerignore
+
+# Dependencias de desarrollo y testing
+node_modules/
+.coverage
+.pytest_cache/
+coverage/
+.mypy_cache/
