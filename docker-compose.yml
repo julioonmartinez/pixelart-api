@@ -1,0 +1,18 @@
+version: '3'
+
+services:
+  api:
+    build: .
+    container_name: pixelart-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./images:/app/images
+      - ./pixelart.db:/app/pixelart.db
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=sqlite:///./pixelart.db
+      - UPLOAD_FOLDER=./images/uploads
+      - RESULTS_FOLDER=./images/results
+    restart: unless-stopped
