@@ -19,7 +19,7 @@ RUN chmod -R 755 /app/images
 
 # Establecer PYTHONPATH para que incluya el directorio raíz
 # Esto permite que Python encuentre los módulos correctamente
-ENV PYTHONPATH="${PYTHONPATH}:/app"
+ENV PYTHONPATH="${PYTHONPATH}:/"
 
 # Mostrar la estructura del proyecto para depuración
 RUN find /app -type f -name "*.py" | sort
