@@ -1,5 +1,6 @@
 FROM python:3.9
 
+# Establecer directorio de trabajo
 WORKDIR /app
 
 # Copiar archivos de dependencias
@@ -14,9 +15,14 @@ COPY . .
 # Crear estructura de directorios para imágenes
 RUN mkdir -p /app/images/results
 RUN mkdir -p /app/images/uploads
-
-# Establecer permisos adecuados
 RUN chmod -R 755 /app/images
+
+# Establecer PYTHONPATH para que incluya el directorio raíz
+# Esto permite que Python encuentre los módulos correctamente
+ENV PYTHONPATH="${PYTHONPATH}:/app"
+
+# Mostrar la estructura del proyecto para depuración
+RUN find /app -type f -name "*.py" | sort
 
 # Exponer el puerto
 EXPOSE 8000
