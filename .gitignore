@@ -3,7 +3,7 @@
 .env.*
 !.env.example
 *.ini
-config.py
+
 
 # Archivos de base de datos
 *.db
