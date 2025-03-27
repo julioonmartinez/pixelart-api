@@ -10,3 +10,4 @@ numpy==1.26.3
 httpx==0.26.0
 cloudinary==1.33.0
 requests==2.31.0  # Para solicitudes HTTP
+pydantic-settings==2.1.0  # Añadir esta línea
