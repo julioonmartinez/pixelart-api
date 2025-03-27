@@ -1,3 +1,4 @@
+#app/api/routes/pixel_art.py
 import os
 import uuid
 import shutil
@@ -14,11 +15,13 @@ from app.services.pixel_art import PixelArtService
 from app.services.openai_service import OpenAIService
 from app.services.image_processing import ImageProcessingService
 from app.services.palette import PaletteService
+from app.services.cloudinary_service import CloudinaryService
 from app.api.deps import (
     get_pixel_art_service, 
     get_openai_service, 
     get_image_processing_service,
-    get_palette_service
+    get_palette_service,
+    get_cloudinary_service
 )
 from app.config import settings
 
@@ -60,7 +63,8 @@ async def generate_from_prompt(
     db: Session = Depends(get_db),
     openai_service: OpenAIService = Depends(get_openai_service),
     pixel_art_service: PixelArtService = Depends(get_pixel_art_service),
-    palette_service: PaletteService = Depends(get_palette_service)
+    palette_service: PaletteService = Depends(get_palette_service),
+    cloudinary_service: CloudinaryService = Depends(get_cloudinary_service)
 ):
     """
     Genera un nuevo pixel art a partir de un prompt utilizando IA.
@@ -73,9 +77,9 @@ async def generate_from_prompt(
         raise HTTPException(status_code=404, detail=f"Palette with id {request.settings.paletteId} not found")
     
     # Generar la imagen con OpenAI
-    image_url = openai_service.generate_from_prompt(request.prompt, request.settings)
+    image_data = openai_service.generate_from_prompt(request.prompt, request.settings)
     
-    if not image_url:
+    if not image_data:
         raise HTTPException(status_code=500, detail="Failed to generate image from prompt")
     
     # Preparar datos para crear el pixel art
@@ -89,24 +93,17 @@ async def generate_from_prompt(
         tags=["ai-generated", "prompt"]
     )
     
-    # Obtener dimensiones (para una implementación real, esto vendría del procesamiento de la imagen)
-    img_width = 64  # Valores de ejemplo
-    img_height = 64
+    # Crear el registro en la base de datos con soporte para Cloudinary
+    pixel_art = pixel_art_service.create_pixel_art(
+        db, 
+        pixel_art_data, 
+        image_data, 
+        cloudinary_service if settings.USE_CLOUDINARY else None
+    )
     
-    # Crear el registro en la base de datos
-    image_data = {
-        "image_url": image_url,
-        "thumbnail_url": image_url,  # En un entorno real, se generaría un thumbnail específico
-        "width": img_width,
-        "height": img_height
-    }
-    
-    pixel_art = pixel_art_service.create_pixel_art(db, pixel_art_data, image_data)
     return pixel_art
 
 # Procesar una imagen subida
-# In your pixel_art_router.py file, update the process_image endpoint
-
 @router.post("/process-image", response_model=PixelArt)
 async def process_image(
     file: UploadFile = File(...),
@@ -122,7 +119,8 @@ async def process_image(
     db: Session = Depends(get_db),
     image_processing_service: ImageProcessingService = Depends(get_image_processing_service),
     pixel_art_service: PixelArtService = Depends(get_pixel_art_service),
-    palette_service: PaletteService = Depends(get_palette_service)
+    palette_service: PaletteService = Depends(get_palette_service),
+    cloudinary_service: CloudinaryService = Depends(get_cloudinary_service)
 ):
     """
     Procesa una imagen subida para convertirla en pixel art.
@@ -181,6 +179,17 @@ async def process_image(
             logger.error("Failed to process image: No data returned from image processing service")
             raise HTTPException(status_code=500, detail="Failed to process image")
         
+        # Si estamos usando OpenAI para procesamiento avanzado
+        openai_service = OpenAIService()
+        advanced_processed = await openai_service.process_image(
+            temp_file_path,
+            process_settings,
+            palette.colors
+        )
+        
+        # Usar el resultado de OpenAI si está disponible, sino usar el procesamiento local
+        image_data = advanced_processed if advanced_processed else processed_image_data
+        
         # Preparar datos para crear el pixel art
         tag_list = [tag.strip() for tag in tags.split(",")] if tags else []
         pixel_art_data = PixelArtCreate(
@@ -193,8 +202,14 @@ async def process_image(
             tags=tag_list
         )
         
-        # Crear el registro en la base de datos
-        pixel_art = pixel_art_service.create_pixel_art(db, pixel_art_data, processed_image_data)
+        # Crear el registro en la base de datos con soporte para Cloudinary
+        pixel_art = pixel_art_service.create_pixel_art(
+            db, 
+            pixel_art_data, 
+            image_data, 
+            cloudinary_service if settings.USE_CLOUDINARY else None
+        )
+        
         return pixel_art
         
     except Exception as e:
@@ -237,12 +252,17 @@ def update_pixel_art(
 def delete_pixel_art(
     pixel_art_id: str,
     db: Session = Depends(get_db),
-    pixel_art_service: PixelArtService = Depends(get_pixel_art_service)
+    pixel_art_service: PixelArtService = Depends(get_pixel_art_service),
+    cloudinary_service: CloudinaryService = Depends(get_cloudinary_service)
 ):
     """
     Elimina un pixel art existente.
     """
-    success = pixel_art_service.delete_pixel_art(db, pixel_art_id)
+    success = pixel_art_service.delete_pixel_art(
+        db, 
+        pixel_art_id, 
+        cloudinary_service if settings.USE_CLOUDINARY else None
+    )
     if not success:
         raise HTTPException(status_code=404, detail="Pixel art not found")
     return {"message": "Pixel art deleted successfully"}

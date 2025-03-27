@@ -1,3 +1,4 @@
+#app/services/openai_service.py
 import os
 import time
 import httpx
@@ -14,7 +15,7 @@ class OpenAIService:
     def __init__(self):
         self.client = OpenAI(api_key=app_settings.OPENAI_API_KEY)
         
-    def generate_from_prompt(self, prompt: str, settings: PixelArtProcessSettings) -> Optional[str]:
+    def generate_from_prompt(self, prompt: str, settings: PixelArtProcessSettings) -> Optional[Dict]:
         """
         Generates pixel art from a text prompt using OpenAI DALL-E.
         
@@ -23,7 +24,7 @@ class OpenAIService:
             settings: Processing configuration for the pixel art
             
         Returns:
-            Local URL of the generated image or None if there was an error
+            Dictionary with image data or None if there was an error
         """
         try:
             # Debug logs
@@ -60,8 +61,16 @@ class OpenAIService:
             with open(image_path, "wb") as f:
                 f.write(image_data)
                 
-            # Return the relative path for the frontend
-            return f"/images/results/{image_filename}"
+            # Prepare the result data with local path for potential Cloudinary upload
+            result = {
+                "image_url": f"/images/results/{image_filename}",  # Relative path for the frontend
+                "thumbnail_url": f"/images/results/{image_filename}",  # Same for thumbnail initially
+                "width": 1024,  # Default DALL-E size
+                "height": 1024,
+                "local_path": image_path  # Add local path for Cloudinary upload
+            }
+            
+            return result
             
         except Exception as e:
             logger.error(f"Error generating image from prompt: {str(e)}")
@@ -78,230 +87,146 @@ class OpenAIService:
         Returns:
             A detailed prompt for DALL-E that incorporates all settings
         """
-        # Get style description
-        style_description = self._get_style_description(settings.style)
+        # Obtener detalles del estilo pixel art solicitado
+        style_info = self._get_style_info(settings.style)
+        pixel_scale = settings.pixelSize
         
-        # Get pixel size description
-        pixel_size_desc = f"{settings.pixelSize}x{settings.pixelSize} pixels per block"
+        # Obtener colores de la paleta
+        palette_colors = self._get_palette_colors(settings.paletteId)
+        color_codes = " ".join(palette_colors)
         
-        # Get background description
-        background_desc = self._get_background_description(settings.backgroundType)
+        # Obtener información sobre el fondo
+        background_info = self._get_background_info(settings.backgroundType)
         
-        # Get animation description (if applicable)
-        animation_desc = self._get_animation_description(settings.animationType)
+        # Crear una descripción compacta y específica
+        background_directive = "transparent background" if settings.backgroundType == BackgroundType.TRANSPARENT else background_info
+
+        # Prompt principal - evitando mencionar "paletas" o cualquier cosa relacionada con swatches
+        main_prompt = f"Create a {style_info} pixel art character of a {prompt}, with {pixel_scale}x{pixel_scale} pixel blocks, on a {background_directive}. Color scheme: {color_codes}. Character only, no text, no UI elements."
         
-        # Get color palette guidance (if palette is defined)
-        palette_guidance = ""
-        if hasattr(settings, 'paletteId') and settings.paletteId:
-            palette_guidance = self._get_palette_guidance(settings.paletteId)
+        # Verificación adicional para asegurarse de que el prompt no mencione paletas
+        final_prompt = main_prompt.replace("palette", "colors").replace("swatch", "colors").replace("color scheme display", "")
         
-        # Get contrast and sharpness adjustments
-        quality_adjustments = self._get_quality_adjustments(
-            getattr(settings, 'contrast', 50), 
-            getattr(settings, 'sharpness', 70)
-        )
+        return final_prompt
+    
+    def _get_style_info(self, style: PixelArtStyle) -> str:
+        """
+        Returns a simple description of the pixel art style.
+        """
+        style_info = {
+            PixelArtStyle.RETRO_8BIT: "retro 8-bit NES-style",
+            PixelArtStyle.MODERN_16BIT: "16-bit SNES-style",
+            PixelArtStyle.MINIMALIST: "minimalist",
+            PixelArtStyle.DITHERED: "dithered",
+            PixelArtStyle.ISOMETRIC: "isometric"
+        }
+        return style_info.get(style, "classic")
+    
+    def _get_palette_colors(self, palette_id: str) -> list:
+        """
+        Returns the color codes for the specified palette.
+        """
+        palette_colors = {
+            'gameboy': ["#0f380f", "#306230", "#8bac0f", "#9bbc0f"],
+            'nes': ["#000000", "#fcfcfc", "#f8f8f8", "#bcbcbc", "#7c7c7c", "#a4000c"],
+            'cga': ["#000000", "#555555", "#aaaaaa", "#ffffff", "#0000aa", "#5555ff"],
+            'pico8': ["#000000", "#1D2B53", "#7E2553", "#008751", "#AB5236", "#5F574F"],
+            'moody': ["#5e315b", "#8c3f5d", "#ba6156", "#f2a65a"]
+        }
         
-        # Build the complete prompt
-        components = [
-            f"Create a {style_description} pixel art with {pixel_size_desc}.",
-            f"The image should ONLY depict: {prompt}.",
-            background_desc,
-            animation_desc,
-            palette_guidance,
-            quality_adjustments,
-            "Make sure the result looks like authentic pixel art with clear, defined pixels.",
-            "Do not add text, color palettes, rulers, or color swatches to the image.",
-            "The image should only show the requested pixel art subject with no additional elements."
-        ]
+        return palette_colors.get(palette_id, ["#000000", "#333333", "#777777", "#ffffff"])
+    
+    def _get_background_info(self, background_type: BackgroundType) -> str:
+        """
+        Returns a simple description of the background.
+        """
+        background_info = {
+            BackgroundType.TRANSPARENT: "transparent",
+            BackgroundType.SOLID: "simple solid color",
+            BackgroundType.GRADIENT: "subtle gradient",
+            BackgroundType.PATTERN: "simple pattern"
+        }
+        return background_info.get(background_type, "simple")
+    
+    async def process_image(self, image_path: str, settings: PixelArtProcessSettings, palette_colors: list = None) -> Optional[Dict]:
+        """
+        Procesa una imagen existente para convertirla en pixel art.
         
-        # Remove empty components and join
-        complete_prompt = " ".join([c for c in components if c])
-        
-        return complete_prompt
+        Args:
+            image_path: Ruta local de la imagen a procesar
+            settings: Configuración de procesamiento para el pixel art
+            palette_colors: Lista opcional de colores de la paleta a usar
             
-    def _get_style_description(self, style: PixelArtStyle) -> str:
+        Returns:
+            Diccionario con los datos de la imagen procesada o None si hubo un error
         """
-        Converts the style enum to a textual description for the prompt.
-        """
-        style_descriptions = {
-            PixelArtStyle.RETRO_8BIT: "retro 8-bit style reminiscent of NES games with limited color palette, bold outlines, and simplified shapes",
-            PixelArtStyle.MODERN_16BIT: "detailed modern 16-bit style similar to SNES games with more colors, smoother gradients, and finer details",
-            PixelArtStyle.MINIMALIST: "minimalist pixel art with very limited colors (4-8 total), high contrast, and essential shapes only",
-            PixelArtStyle.DITHERED: "pixel art with dithering patterns to create textured gradients and the illusion of more colors",
-            PixelArtStyle.ISOMETRIC: "isometric perspective pixel art with 2:1 diamond-shaped pixels creating a 3D-like appearance"
-        }
-        
-        return style_descriptions.get(style, "retro 8-bit style")
-    
-    def _get_background_description(self, background_type: BackgroundType) -> str:
-        """
-        Provides a description for the background type.
-        """
-        background_descriptions = {
-            BackgroundType.TRANSPARENT: "Create the main subject only, with no background (transparent background).",
-            BackgroundType.SOLID: "Use a simple solid color background that complements the main subject.",
-            BackgroundType.GRADIENT: "Use a subtle gradient background that enhances the mood of the image.",
-            BackgroundType.PATTERN: "Include a simple repeating pattern as background that fits the theme."
-        }
-        
-        return background_descriptions.get(background_type, "")
-    
-    def _get_animation_description(self, animation_type: AnimationType) -> str:
-        """
-        Provides a description for the animation type, if applicable.
-        """
-        # Note: DALL-E can't generate actual animations, but we can suggest a frame
-        # that implies the type of animation intended
-        animation_descriptions = {
-            AnimationType.NONE: "",
-            AnimationType.BREATHING: "Design the image to suggest a breathing/pulsating effect (as a single frame).",
-            AnimationType.FLICKERING: "Create the image with elements that suggest a flickering effect (as a single frame).",
-            AnimationType.FLOATING: "Design elements that suggest floating/hovering motion (as a single frame)."
-        }
-        
-        return animation_descriptions.get(animation_type, "")
-    
-    def _get_palette_guidance(self, palette_id: str) -> str:
-        """
-        Provides color palette guidance based on palette ID.
-        """
-        # Define common pixel art palettes
-        palette_descriptions = {
-            'gameboy': "Use only 4 shades of greenish-gray colors, similar to the original Game Boy palette for the entire image. DO NOT include a color palette chart or color swatches in the image itself.",
-            'nes': "Use the NES color palette with limited but vibrant colors for the entire image. DO NOT show any color swatches or palette references within the image.",
-            'commodore64': "Use the Commodore 64's distinctive 16-color palette with blues and purples for the pixel art. DO NOT include a color palette chart in the image.",
-            'cga': "Use the CGA palette with its characteristic cyan, magenta, and black colors. DO NOT draw or include the palette itself in the image.",
-            'pico8': "Use the PICO-8 fantasy console's 16-color palette with its distinctive look for the entire illustration. DO NOT include a visual color reference in the image.",
-            'monochrome': "Use only black and white or a single color with different shades. DO NOT include any color reference swatches in the image.",
-            'pastel': "Use soft, light pastel colors with low saturation. DO NOT show a palette or color guide within the image.",
-            'cyberpunk': "Use neon colors like pink, cyan, and purple on dark backgrounds for a cyberpunk feel. DO NOT include a color palette visualization in the image."
-        }
-        
-        return palette_descriptions.get(palette_id, "Use a cohesive and limited color palette appropriate for pixel art. DO NOT include a color palette chart or color swatches in the actual image.")
-    
-    def _get_quality_adjustments(self, contrast: int, sharpness: int) -> str:
-        """
-        Generates guidance for contrast and sharpness based on settings.
-        """
-        contrast_desc = ""
-        if contrast < 30:
-            contrast_desc = "with low contrast for a softer look"
-        elif contrast > 70:
-            contrast_desc = "with high contrast for a bold look"
-            
-        sharpness_desc = ""
-        if sharpness < 30:
-            sharpness_desc = "keep edges slightly soft"
-        elif sharpness > 70:
-            sharpness_desc = "ensure pixel edges are very crisp and well-defined"
-            
-        if contrast_desc and sharpness_desc:
-            return f"Create the image {contrast_desc} and {sharpness_desc}."
-        elif contrast_desc:
-            return f"Create the image {contrast_desc}."
-        elif sharpness_desc:
-            return f"Create the image with {sharpness_desc}."
-        else:
-            return ""
-async def process_image(self, image_path: str, settings: PixelArtProcessSettings) -> Optional[str]:
-    """
-    Processes an existing image to convert it into pixel art.
-    
-    Args:
-        image_path: Local path to the image to process
-        settings: Processing configuration for the pixel art
-        
-    Returns:
-        Local URL of the processed image or None if there was an error
-    """
-    try:
-        # Read the image and convert to base64
-        with open(image_path, "rb") as image_file:
-            base64_image = base64.b64encode(image_file.read()).decode('utf-8')
-        
-        # Extract the filename without extension for reference in the prompt
-        image_filename = os.path.basename(image_path).split(".")[0]
-        
-        # Get detailed style descriptions from settings
-        style_description = self._get_style_description(settings.style)
-        pixel_size_desc = f"{settings.pixelSize}x{settings.pixelSize} pixels per block"
-        background_desc = self._get_background_description(settings.backgroundType)
-        
-        # Get animation description (if applicable)
-        animation_desc = self._get_animation_description(settings.animationType)
-        
-        # Get color palette guidance (if palette is defined)
-        palette_guidance = ""
-        if hasattr(settings, 'paletteId') and settings.paletteId:
-            palette_guidance = self._get_palette_guidance(settings.paletteId)
-        
-        # Get contrast and sharpness adjustments
-        quality_adjustments = self._get_quality_adjustments(
-            getattr(settings, 'contrast', 50), 
-            getattr(settings, 'sharpness', 70)
-        )
-        
-        # Build a comprehensive prompt for the transformation
-        components = [
-            f"Transform this image into authentic {style_description} pixel art with {pixel_size_desc}.",
-            f"Preserve the main subject and composition of the original image, but recreate it completely in pixel art style.",
-            "Make sure each pixel is clearly defined and visible.",
-            background_desc,
-            animation_desc,
-            palette_guidance,
-            quality_adjustments,
-            "The result should look like genuine pixel art made of individual square pixels.",
-            "Focus on clear silhouettes and recognizable forms.",
-            "Simplify complex details while maintaining the essence of the original image.",
-            "Do not add text, color palettes, rulers, or color swatches to the image."
-        ]
-        
-        # Remove empty components and join
-        complete_prompt = " ".join([c for c in components if c])
-        
-        logger.info(f"Processing image with prompt: {complete_prompt[:100]}...")
-        print(f"Complete image processing prompt: {complete_prompt}")
-        
-        # Option 1: Try using the variation API (might work better for pixel art transformation)
         try:
-            # First, try using DALL-E 3 with the image as a reference
-            response = self.client.images.generate(
-                model="dall-e-3",
-                prompt=complete_prompt,
-                size="1024x1024",
-                quality="standard",
-                n=1,
-            )
+            # Leer la imagen
+            with open(image_path, "rb") as image_file:
+                base64_image = base64.b64encode(image_file.read()).decode('utf-8')
             
-            # Get processed image URL
-            processed_url = response.data[0].url
+            # Obtener estilo y configuración
+            style_info = self._get_style_info(settings.style)
+            pixel_scale = settings.pixelSize
             
-        except Exception as inner_e:
-            logger.warning(f"DALL-E 3 generation failed, trying images.create_variation: {str(inner_e)}")
+            # Obtener colores de la paleta
+            if palette_colors and len(palette_colors) > 0:
+                colors = palette_colors
+            else:
+                colors = self._get_palette_colors(settings.paletteId)
             
-            # Fallback to image variation if that fails
-            response = self.client.images.create_variation(
-                image=base64_image,
-                n=1,
-                size="1024x1024"
-            )
+            color_codes = " ".join(colors)
             
-            processed_url = response.data[0].url
-        
-        # Download processed image
-        image_data = httpx.get(processed_url).content
-        
-        # Save locally
-        timestamp = int(time.time())
-        processed_filename = f"processed_{timestamp}.png"
-        processed_path = os.path.join(app_settings.RESULTS_FOLDER, processed_filename)
-        
-        with open(processed_path, "wb") as f:
-            f.write(image_data)
+            # Crear un prompt simplificado
+            prompt = f"Transform this image into a {style_info} pixel art with {pixel_scale}x{pixel_scale} pixel blocks. Colors to use: {color_codes}. Faithfully preserve the original subject but in pixel art style. No text, no UI elements."
             
-        # Return relative path for the frontend
-        return f"/images/results/{processed_filename}"
-        
-    except Exception as e:
-        logger.error(f"Error processing image: {str(e)}")
-        return None
+            # Procesamiento
+            try:
+                # Usar DALL-E 3
+                response = self.client.images.generate(
+                    model="dall-e-3",
+                    prompt=prompt,
+                    size="1024x1024",
+                    quality="standard",
+                    n=1,
+                )
+                
+                processed_url = response.data[0].url
+                
+            except Exception as inner_e:
+                logger.warning(f"DALL-E 3 generation failed, trying image variation: {str(inner_e)}")
+                
+                # Alternativa: variación de imagen
+                response = self.client.images.create_variation(
+                    image=open(image_path, "rb"),
+                    n=1,
+                    size="1024x1024"
+                )
+                
+                processed_url = response.data[0].url
+            
+            # Descargar imagen procesada
+            image_data = httpx.get(processed_url).content
+            
+            # Guardar localmente
+            timestamp = int(time.time())
+            processed_filename = f"processed_{timestamp}.png"
+            processed_path = os.path.join(app_settings.RESULTS_FOLDER, processed_filename)
+            
+            with open(processed_path, "wb") as f:
+                f.write(image_data)
+            
+            # Preparar resultado
+            result = {
+                "image_url": f"/images/results/{processed_filename}",
+                "thumbnail_url": f"/images/results/{processed_filename}",
+                "width": 1024,
+                "height": 1024,
+                "local_path": processed_path
+            }
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error processing image: {str(e)}")
+            return None

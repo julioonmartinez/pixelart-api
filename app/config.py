@@ -1,4 +1,4 @@
-# config.py
+# app/config.py
 import os
 from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     
     # CORS
     CORS_ORIGINS: list = ["http://localhost:4200", "https://localhost:4200"]
+    
+    # Cloudinary
+    CLOUDINARY_CLOUD_NAME: str = os.getenv("CLOUDINARY_CLOUD_NAME", "")
+    CLOUDINARY_API_KEY: str = os.getenv("CLOUDINARY_API_KEY", "")
+    CLOUDINARY_API_SECRET: str = os.getenv("CLOUDINARY_API_SECRET", "")
+    USE_CLOUDINARY: bool = os.getenv("USE_CLOUDINARY", "True").lower() in ("true", "1", "t")
+    DELETE_LOCAL_FILES_AFTER_UPLOAD: bool = os.getenv("DELETE_LOCAL_FILES_AFTER_UPLOAD", "True").lower() in ("true", "1", "t")
     
     # Configuración de la aplicación
     PROJECT_NAME: str = "PixelArt Generator API"

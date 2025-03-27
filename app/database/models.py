@@ -1,56 +1,51 @@
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, DateTime, Text, JSON
+from sqlalchemy import Column, String, Integer, Boolean, ForeignKey, DateTime, JSON, Text
 from sqlalchemy.orm import relationship
-from datetime import datetime
-import uuid
+from sqlalchemy.sql import func
+from app.database.database import Base
 
-from .database import Base
-
+class DBColorPalette(Base):
+    __tablename__ = "color_palettes"
+    
+    id = Column(String, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    colors = Column(JSON, nullable=False, default=list)
+    description = Column(String, nullable=True)
+    createdAt = Column(DateTime(timezone=True), server_default=func.now())
+    updatedAt = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relación con pixel arts
+    pixel_arts = relationship("DBPixelArt", back_populates="palette")
 
 class DBPixelArt(Base):
     __tablename__ = "pixel_arts"
-
-    id = Column(String, primary_key=True, index=True, default=lambda: str(uuid.uuid4()))
-    name = Column(String, index=True)
     
-    # Rutas de imágenes
-    imageUrl = Column(String)
-    thumbnailUrl = Column(String)
-    
-    # Metadatos
-    createdAt = Column(DateTime, default=datetime.utcnow)
-    width = Column(Integer)
-    height = Column(Integer)
-    pixelSize = Column(Integer)
-    
-    # Estilo y configuración
-    style = Column(String)
-    backgroundType = Column(String)
-    animationType = Column(String, default="none")
+    id = Column(String, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    imageUrl = Column(String, nullable=False)
+    thumbnailUrl = Column(String, nullable=False)
+    width = Column(Integer, nullable=False)
+    height = Column(Integer, nullable=False)
+    pixelSize = Column(Integer, nullable=False, default=8)
+    style = Column(String, nullable=False)
+    backgroundType = Column(String, nullable=False)
+    animationType = Column(String, nullable=False, default="none")
     isAnimated = Column(Boolean, default=False)
+    paletteId = Column(String, ForeignKey("color_palettes.id"))
+    tags = Column(JSON, nullable=True, default=list)
+    description = Column(Text, nullable=True)
+    createdAt = Column(DateTime(timezone=True), server_default=func.now())
+    updatedAt = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Nuevo campo para el ID público de Cloudinary
+    cloudinaryPublicId = Column(String, nullable=True)
     
     # Relación con la paleta
-    paletteId = Column(String, ForeignKey("palettes.id"))
     palette = relationship("DBColorPalette", back_populates="pixel_arts")
-    
-    # Etiquetas como lista JSON
-    tags = Column(JSON, default=list)
-
-
-class DBColorPalette(Base):
-    __tablename__ = "palettes"
-
-    id = Column(String, primary_key=True, index=True)
-    name = Column(String, unique=True, index=True)
-    colors = Column(JSON)  # Lista de colores en formato hex
-    
-    # Relación con los pixel arts
-    pixel_arts = relationship("DBPixelArt", back_populates="palette")
-
 
 class DBUserSettings(Base):
     __tablename__ = "user_settings"
-
-    id = Column(String, primary_key=True, index=True)
+    
+    userId = Column(String, primary_key=True, index=True)
     pixelSize = Column(Integer, default=8)
     defaultStyle = Column(String, default="retro")
     defaultPalette = Column(String, default="gameboy")
@@ -59,3 +54,5 @@ class DBUserSettings(Base):
     defaultBackground = Column(String, default="transparent")
     defaultAnimationType = Column(String, default="none")
     theme = Column(String, default="dark")
+    createdAt = Column(DateTime(timezone=True), server_default=func.now())
+    updatedAt = Column(DateTime(timezone=True), onupdate=func.now())

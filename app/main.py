@@ -1,3 +1,4 @@
+#app/main.py
 import os
 import logging
 from fastapi import FastAPI, Request
@@ -9,6 +10,7 @@ from app.config import settings
 from app.database.database import get_db, engine
 from app.database.models import Base
 from app.services.palette import PaletteService
+from app.database.migrations import run_migrations  # Importar el script de migración
 
 # Configurar logging
 logging.basicConfig(
@@ -26,6 +28,9 @@ logger = logging.getLogger(__name__)
 
 # Crear las tablas en la base de datos
 Base.metadata.create_all(bind=engine)
+
+# Ejecutar migraciones adicionales para actualizar el esquema
+run_migrations()
 
 # Inicializar la aplicación
 app = FastAPI(
@@ -79,7 +84,6 @@ async def root():
         "description": settings.DESCRIPTION,
     }
 
-#  python -m app.main
 # Ruta de estado (health check)
 @app.get("/health")
 async def health():
