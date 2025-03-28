@@ -105,7 +105,10 @@ async def health():
 
 if __name__ == "__main__":
     import uvicorn
-    
+    import os
+
+    # Obtener el puerto de la variable de entorno PORT, o usar 8000 como valor predeterminado
+    port = int(os.environ.get("PORT", 8000))
     # Ejecutar el servidor
     uvicorn.run(
         "app.main:app",
