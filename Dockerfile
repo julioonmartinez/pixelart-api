@@ -28,7 +28,8 @@ ENV MONGODB_URL="mongodb://mongodb:27017"
 ENV MONGODB_DB_NAME="pixelart_db"
 
 # Exponer el puerto
-EXPOSE 8000
+ENV PORT=8000
+EXPOSE $PORT
 
 # Script de inicio para esperar a que MongoDB esté disponible
 COPY ./scripts/start.sh /start.sh

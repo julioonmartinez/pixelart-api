@@ -47,6 +47,7 @@ echo "MONGODB_DB_NAME: $MONGODB_DB_NAME"
 # Esperar a que MongoDB esté disponible (si es local)
 wait_for_mongodb
 
+PORT=${PORT:-8000}
 # Iniciar la aplicación FastAPI
-echo "Starting FastAPI application..."
-exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+echo "Starting FastAPI application on port $PORT..."
+exec uvicorn app.main:app --host 0.0.0.0 --port $PORT
