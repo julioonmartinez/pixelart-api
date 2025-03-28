@@ -4,11 +4,15 @@
 wait_for_mongodb() {
     echo "Waiting for MongoDB to be ready..."
     
+    # Si estamos en Render, omitir la verificación de conexión
+    if [ -n "$RENDER" ]; then
+        echo "Running on Render, skipping MongoDB connection check..."
+        return 0
+    fi
+    
     # Verificar si es una URL SRV (mongodb+srv://)
     if [[ "$MONGODB_URL" == mongodb+srv://* ]]; then
-        echo "Detectada URL SRV de MongoDB Atlas. No se puede verificar con nc, continuando..."
-        # Para MongoDB Atlas, simplemente esperamos un poco
-        sleep 5
+        echo "Detected MongoDB Atlas SRV URL. Skipping connection check..."
         return 0
     fi
     
@@ -23,31 +27,43 @@ wait_for_mongodb() {
     
     echo "Checking MongoDB connection at $MONGODB_HOST:$MONGODB_PORT..."
     
-    # Esperar hasta que MongoDB esté disponible
-    until nc -z $MONGODB_HOST $MONGODB_PORT; do
-        echo "MongoDB is unavailable - sleeping"
+    # Esperar hasta que MongoDB esté disponible, con un límite de intentos
+    MAX_RETRIES=30
+    COUNT=0
+    until nc -z $MONGODB_HOST $MONGODB_PORT || [ $COUNT -eq $MAX_RETRIES ]; do
+        echo "MongoDB is unavailable - sleeping (attempt $COUNT/$MAX_RETRIES)"
         sleep 1
+        COUNT=$((COUNT+1))
     done
+    
+    if [ $COUNT -eq $MAX_RETRIES ]; then
+        echo "WARNING: Could not connect to MongoDB after $MAX_RETRIES attempts. Continuing anyway..."
+        return 0
+    fi
     
     echo "MongoDB is up and running!"
 }
 
 # Establecer valores por defecto si no están definidos
 if [ -z "$MONGODB_URL" ]; then
-  export MONGODB_URL="mongodb://mongodb:27017"
+  echo "No MONGODB_URL specified, using default"
+  export MONGODB_URL="mongodb://localhost:27017"
 fi
 
 if [ -z "$MONGODB_DB_NAME" ]; then
+  echo "No MONGODB_DB_NAME specified, using default"
   export MONGODB_DB_NAME="pixelart_db"
 fi
 
-echo "MONGODB_URL: $MONGODB_URL"
+echo "MONGODB_URL: $MONGODB_URL (host: $(echo $MONGODB_URL | sed -e 's/^mongodb:\/\///' | cut -d':' -f1))"
 echo "MONGODB_DB_NAME: $MONGODB_DB_NAME"
 
 # Esperar a que MongoDB esté disponible (si es local)
 wait_for_mongodb
 
+# Obtener el puerto de la variable de entorno o usar 8000 como predeterminado
 PORT=${PORT:-8000}
+
 # Iniciar la aplicación FastAPI
 echo "Starting FastAPI application on port $PORT..."
 exec uvicorn app.main:app --host 0.0.0.0 --port $PORT
