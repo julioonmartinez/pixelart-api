@@ -54,6 +54,8 @@ app.add_middleware(
 app.mount("/images/results", StaticFiles(directory=settings.RESULTS_FOLDER), name="results")
 app.mount("/images/uploads", StaticFiles(directory=settings.UPLOAD_FOLDER), name="uploads")
 
+
+
 # Incluir rutas de la API
 app.include_router(api_router, prefix=settings.API_PREFIX)
 

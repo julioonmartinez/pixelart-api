@@ -4,7 +4,7 @@ FROM python:3.9
 WORKDIR /app
 
 # Instalar netcat para verificación de disponibilidad
-RUN apt-get update && apt-get install -y netcat
+RUN apt-get update && apt-get install -y netcat-openbsd
 
 # Copiar archivos de dependencias
 COPY requirements.txt .

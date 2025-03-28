@@ -23,6 +23,7 @@ class PixelArtMongoService:
         
         # Obtener todas las paletas disponibles para hacer una búsqueda eficiente
         all_palettes = {p["id"]: p for p in sync_palettes_collection.find()}
+       
         
         # Agregar el campo palette a cada pixel art
         for art in pixel_arts:
@@ -37,7 +38,7 @@ class PixelArtMongoService:
                     "colors": ["#0f380f", "#306230", "#8bac0f", "#9bbc0f"]  # Colores Gameboy por defecto
                 }
                 art["palette"] = default_palette
-        
+        print(pixel_arts)
         return pixel_arts
     
     @staticmethod

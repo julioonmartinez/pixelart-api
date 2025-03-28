@@ -13,13 +13,6 @@ services:
       - pixelart-network
     environment:
       - MONGO_INITDB_DATABASE=pixelart_db
-    # Actualizado el healthcheck para MongoDB 6.0
-    healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
 
   api:
     build: .
@@ -29,11 +22,11 @@ services:
       - "8000:8000"
     volumes:
       - ./:/app
-      - image_data:/app/images
+      - image_data:/app/images:rw
     networks:
       - pixelart-network
     environment:
-      - MONGODB_URL=mongodb://mongodb:27017
+      - MONGODB_URL=${MONGODB_URL:-mongodb://mongodb:27017}
       - MONGODB_DB_NAME=pixelart_db
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - USE_CLOUDINARY=${USE_CLOUDINARY:-False}
@@ -41,24 +34,9 @@ services:
       - CLOUDINARY_API_KEY=${CLOUDINARY_API_KEY}
       - CLOUDINARY_API_SECRET=${CLOUDINARY_API_SECRET}
     depends_on:
-      mongodb:
-        condition: service_healthy
-    command: bash -c "pip install pydantic-settings==2.1.0 && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"
-
-  # Opcionalmente agregar un cliente web para MongoDB (comentar si no se necesita)
-  mongo-express:
-    image: mongo-express:latest
-    container_name: pixelart-mongo-express
-    restart: always
-    ports:
-      - "8081:8081"
-    networks:
-      - pixelart-network
-    environment:
-      - ME_CONFIG_MONGODB_SERVER=mongodb
-      - ME_CONFIG_MONGODB_PORT=27017
-    depends_on:
       - mongodb
+    # Usar el start.sh que ya tienes definido en el Dockerfile
+    # No sobrescribir con un command aquí
 
 networks:
   pixelart-network:
