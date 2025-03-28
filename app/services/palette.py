@@ -1,3 +1,4 @@
+#app/service/pallete.py
 from typing import List, Optional, Dict
 from sqlalchemy.orm import Session
 from app.database.models import DBColorPalette

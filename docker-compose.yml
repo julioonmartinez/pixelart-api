@@ -1,18 +1,69 @@
-version: '3'
+version: '3.8'
 
 services:
+  mongodb:
+    image: mongo:6.0
+    container_name: pixelart-mongodb
+    restart: always
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - pixelart-network
+    environment:
+      - MONGO_INITDB_DATABASE=pixelart_db
+    # Actualizado el healthcheck para MongoDB 6.0
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
   api:
     build: .
     container_name: pixelart-api
+    restart: always
     ports:
       - "8000:8000"
     volumes:
-      - ./images:/app/images
-      - ./pixelart.db:/app/pixelart.db
-    env_file:
-      - .env
+      - ./:/app
+      - image_data:/app/images
+    networks:
+      - pixelart-network
     environment:
-      - DATABASE_URL=sqlite:///./pixelart.db
-      - UPLOAD_FOLDER=./images/uploads
-      - RESULTS_FOLDER=./images/results
-    restart: unless-stopped
+      - MONGODB_URL=mongodb://mongodb:27017
+      - MONGODB_DB_NAME=pixelart_db
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - USE_CLOUDINARY=${USE_CLOUDINARY:-False}
+      - CLOUDINARY_CLOUD_NAME=${CLOUDINARY_CLOUD_NAME}
+      - CLOUDINARY_API_KEY=${CLOUDINARY_API_KEY}
+      - CLOUDINARY_API_SECRET=${CLOUDINARY_API_SECRET}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    command: bash -c "pip install pydantic-settings==2.1.0 && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+  # Opcionalmente agregar un cliente web para MongoDB (comentar si no se necesita)
+  mongo-express:
+    image: mongo-express:latest
+    container_name: pixelart-mongo-express
+    restart: always
+    ports:
+      - "8081:8081"
+    networks:
+      - pixelart-network
+    environment:
+      - ME_CONFIG_MONGODB_SERVER=mongodb
+      - ME_CONFIG_MONGODB_PORT=27017
+    depends_on:
+      - mongodb
+
+networks:
+  pixelart-network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
+  image_data:

@@ -3,6 +3,9 @@ FROM python:3.9
 # Establecer directorio de trabajo
 WORKDIR /app
 
+# Instalar netcat para verificación de disponibilidad
+RUN apt-get update && apt-get install -y netcat
+
 # Copiar archivos de dependencias
 COPY requirements.txt .
 
@@ -18,14 +21,18 @@ RUN mkdir -p /app/images/uploads
 RUN chmod -R 755 /app/images
 
 # Establecer PYTHONPATH para que incluya el directorio raíz
-# Esto permite que Python encuentre los módulos correctamente
 ENV PYTHONPATH="${PYTHONPATH}:/"
 
-# Mostrar la estructura del proyecto para depuración
-RUN find /app -type f -name "*.py" | sort
+# Variables de entorno para MongoDB
+ENV MONGODB_URL="mongodb://mongodb:27017"
+ENV MONGODB_DB_NAME="pixelart_db"
 
 # Exponer el puerto
 EXPOSE 8000
 
-# Ejecutar la aplicación
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Script de inicio para esperar a que MongoDB esté disponible
+COPY ./scripts/start.sh /start.sh
+RUN chmod +x /start.sh
+
+# Ejecutar script de inicio que incluye la espera a MongoDB
+CMD ["/start.sh"]

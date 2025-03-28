@@ -10,7 +10,9 @@ from app.config import settings
 from app.database.database import get_db, engine
 from app.database.models import Base
 from app.services.palette import PaletteService
-from app.database.migrations import run_migrations  # Importar el script de migración
+from app.services.palette_mongo import PaletteMongoService
+from app.database.migrations import run_migrations
+from app.database.mongodb import init_mongodb
 
 # Configurar logging
 logging.basicConfig(
@@ -26,7 +28,7 @@ origins = [
 
 logger = logging.getLogger(__name__)
 
-# Crear las tablas en la base de datos
+# Crear las tablas en la base de datos SQLite (para compatibilidad)
 Base.metadata.create_all(bind=engine)
 
 # Ejecutar migraciones adicionales para actualizar el esquema
@@ -48,7 +50,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # Montar las carpetas estáticas para servir imágenes
 app.mount("/images/results", StaticFiles(directory=settings.RESULTS_FOLDER), name="results")
 app.mount("/images/uploads", StaticFiles(directory=settings.UPLOAD_FOLDER), name="uploads")
@@ -65,15 +66,26 @@ async def startup_event():
     os.makedirs(settings.UPLOAD_FOLDER, exist_ok=True)
     os.makedirs(settings.RESULTS_FOLDER, exist_ok=True)
     
-    # Inicializar paletas predeterminadas
+    # Inicializar paletas predeterminadas en SQLite (para compatibilidad)
     db = next(get_db())
     try:
         PaletteService.initialize_default_palettes(db)
-        logger.info("Default palettes initialized")
+        logger.info("Default palettes initialized in SQLite")
     except Exception as e:
-        logger.error(f"Error initializing default palettes: {str(e)}")
+        logger.error(f"Error initializing default palettes in SQLite: {str(e)}")
     finally:
         db.close()
+    
+    # Inicializar MongoDB y sus índices
+    try:
+        await init_mongodb()
+        logger.info("MongoDB initialized successfully")
+        
+        # Inicializar paletas predeterminadas en MongoDB
+        count = PaletteMongoService.initialize_default_palettes()
+        logger.info(f"Default palettes initialized in MongoDB: {count} palettes")
+    except Exception as e:
+        logger.error(f"Error initializing MongoDB: {str(e)}")
 
 # Ruta raíz
 @app.get("/")
