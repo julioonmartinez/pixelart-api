@@ -44,9 +44,35 @@ class PixelArtMongoService:
     @staticmethod
     def get_pixel_art_by_id(pixel_art_id: str) -> Optional[Dict]:
         """
-        Obtiene un pixel art específico por su ID.
+        Obtiene un pixel art específico por su ID, incluyendo información de su paleta.
         """
-        return sync_pixel_arts_collection.find_one({"id": pixel_art_id})
+        pixel_art = sync_pixel_arts_collection.find_one({"id": pixel_art_id})
+        
+        if pixel_art:
+            # Buscar la información de la paleta asociada
+            if "paletteId" in pixel_art:
+                palette = sync_palettes_collection.find_one({"id": pixel_art["paletteId"]})
+                if palette:
+                    # Si encontramos la paleta, la agregamos al objeto
+                    pixel_art["palette"] = palette
+                else:
+                    # Si no encontramos la paleta, creamos una por defecto
+                    default_palette = {
+                        "id": pixel_art.get("paletteId", "default"),
+                        "name": pixel_art.get("paletteId", "Default").capitalize(),
+                        "colors": ["#0f380f", "#306230", "#8bac0f", "#9bbc0f"]  # Colores Gameboy por defecto
+                    }
+                    pixel_art["palette"] = default_palette
+            else:
+                # Si no hay paletteId, también usamos la paleta por defecto
+                default_palette = {
+                    "id": "default",
+                    "name": "Default",
+                    "colors": ["#0f380f", "#306230", "#8bac0f", "#9bbc0f"]  # Colores Gameboy por defecto
+                }
+                pixel_art["palette"] = default_palette
+        
+        return pixel_art
     
     @staticmethod
     def create_pixel_art(
@@ -309,3 +335,131 @@ class PixelArtMongoService:
             "items": items,
             "total": total
         }
+    @staticmethod
+    def update_pixel_art_with_image(
+        pixel_art_id: str, 
+        updates: Dict, 
+        image_data: Dict,
+        cloudinary_service: Optional[CloudinaryService] = None
+    ) -> Optional[Dict]:
+        """
+        Actualiza un pixel art existente con una nueva imagen,
+        preservando la versión anterior en el historial.
+        
+        Args:
+            pixel_art_id: ID del pixel art a actualizar
+            updates: Diccionario con los campos a actualizar
+            image_data: Información de la nueva imagen procesada (URLs, dimensiones)
+            cloudinary_service: Servicio opcional de Cloudinary
+                
+        Returns:
+            El objeto pixel art actualizado o None si no se encuentra
+        """
+        logger.info(f"Starting update_pixel_art_with_image for id={pixel_art_id}")
+        
+        # Verificar si existe
+        existing = PixelArtMongoService.get_pixel_art_by_id(pixel_art_id)
+        if not existing:
+            logger.error(f"Pixel art with id={pixel_art_id} not found")
+            return None
+        
+        # Determinar los valores de imagen y miniatura
+        image_url = image_data.get("image_url", "")
+        thumbnail_url = image_data.get("thumbnail_url", image_url)
+        width = image_data.get("width", existing.get("width", 0))
+        height = image_data.get("height", existing.get("height", 0))
+        
+        # Si hay una ruta de archivo local y Cloudinary está disponible, subir a Cloudinary
+        local_image_path = image_data.get("local_path", "")
+        cloudinary_public_id = ""
+        
+        if local_image_path and os.path.exists(local_image_path) and settings.USE_CLOUDINARY and cloudinary_service:
+            try:
+                # Subir la imagen a Cloudinary
+                is_result = True  # Asumimos que es una imagen resultado
+                cloudinary_image_url, cloudinary_thumbnail_url, cloud_width, cloud_height = cloudinary_service.process_image_upload(
+                    local_image_path, is_result
+                )
+                
+                # Actualizar los valores
+                image_url = cloudinary_image_url
+                thumbnail_url = cloudinary_thumbnail_url
+                
+                # Extraer el ID público de la URL de Cloudinary
+                if "cloudinary.com" in image_url:
+                    parts = image_url.split("/")
+                    if "upload" in parts:
+                        idx = parts.index("upload")
+                        if idx + 2 < len(parts):
+                            cloudinary_public_id = parts[idx + 2].split(".")[0]
+                
+                # Usar las dimensiones de Cloudinary si están disponibles
+                if cloud_width > 0 and cloud_height > 0:
+                    width = cloud_width
+                    height = cloud_height
+                    
+                logger.info(f"Updated image uploaded to Cloudinary: {image_url}")
+                
+                # IMPORTANTE: Ya no eliminamos la imagen anterior en Cloudinary,
+                # ya que forma parte del historial de versiones
+                    
+            except Exception as e:
+                logger.error(f"Error uploading to Cloudinary: {str(e)}. Using local path as fallback.")
+                # Si hay un error, usamos la URL original como respaldo
+        
+        # Preparar las actualizaciones
+        updates["updatedAt"] = datetime.now()
+        updates["imageUrl"] = image_url
+        updates["thumbnailUrl"] = thumbnail_url
+        updates["width"] = width
+        updates["height"] = height
+        
+        # Añadir el ID de Cloudinary si está disponible
+        if cloudinary_public_id:
+            updates["cloudinaryPublicId"] = cloudinary_public_id
+        
+        # Verificar que el historial de versiones existe y está correctamente formateado
+        if "versionHistory" in updates and not isinstance(updates["versionHistory"], list):
+            logger.warning("versionHistory in updates is not a list. Fixing it.")
+            updates["versionHistory"] = []
+        
+        # Actualizar en MongoDB
+        try:
+            result = sync_pixel_arts_collection.update_one(
+                {"id": pixel_art_id},
+                {"$set": updates}
+            )
+            logger.info(f"MongoDB update result: matched={result.matched_count}, modified={result.modified_count}")
+        except Exception as db_error:
+            logger.error(f"Error updating MongoDB: {str(db_error)}")
+            return None
+        
+        # Obtener el documento actualizado
+        updated = PixelArtMongoService.get_pixel_art_by_id(pixel_art_id)
+        if not updated:
+            logger.error("Failed to retrieve updated pixel art after update")
+            return None
+        
+        # Añadir la información de la paleta
+        if updated:
+            try:
+                palette = sync_palettes_collection.find_one({"id": updated["paletteId"]})
+                if palette:
+                    updated["palette"] = {
+                        "id": palette["id"],
+                        "name": palette["name"],
+                        "colors": palette["colors"]
+                    }
+                else:
+                    logger.warning(f"Palette with id {updated['paletteId']} not found")
+                    # Proporcionar una paleta por defecto
+                    updated["palette"] = {
+                        "id": updated.get("paletteId", "default"),
+                        "name": "Default Palette",
+                        "colors": ["#000000", "#555555", "#aaaaaa", "#ffffff"]
+                    }
+            except Exception as palette_error:
+                logger.error(f"Error retrieving palette: {str(palette_error)}")
+        
+        logger.info(f"Successfully updated pixel art with new image")
+        return updated

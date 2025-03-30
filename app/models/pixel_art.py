@@ -1,3 +1,4 @@
+#app/models/pixel_art.py
 from enum import Enum
 from pydantic import BaseModel, Field
 from typing import List, Optional
@@ -87,3 +88,26 @@ class PaletteList(BaseModel):
 class PixelArtList(BaseModel):
     items: List[PixelArt]
     total: int
+
+class PixelArtVersion(BaseModel):
+    timestamp: str
+    imageUrl: str
+    thumbnailUrl: str
+    prompt: Optional[str] = None
+    changes: dict
+
+class PixelArt(PixelArtBase):
+    id: str
+    imageUrl: str
+    thumbnailUrl: str
+    createdAt: datetime
+    updatedAt: Optional[datetime] = None
+    width: int
+    height: int
+    isAnimated: bool
+    palette: ColorPalette
+    prompt: Optional[str] = None
+    versionHistory: Optional[List[PixelArtVersion]] = None
+    
+    class Config:
+        from_attributes = True

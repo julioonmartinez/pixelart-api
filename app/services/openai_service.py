@@ -230,3 +230,118 @@ class OpenAIService:
         except Exception as e:
             logger.error(f"Error processing image: {str(e)}")
             return None
+    async def update_image(self, image_path: str, prompt: str, settings: PixelArtProcessSettings, palette_colors: list = None) -> Optional[Dict]:
+        """
+        Actualiza una imagen de pixel art existente aplicando modificaciones según el prompt.
+        Utiliza GPT-4 con visión para analizar la imagen y DALL-E 3 para generar la versión actualizada.
+        
+        Args:
+            image_path: Ruta local de la imagen existente
+            prompt: Texto que describe las modificaciones a realizar
+            settings: Configuración de procesamiento para el pixel art
+            palette_colors: Lista opcional de colores de la paleta a usar
+                
+        Returns:
+            Diccionario con los datos de la imagen procesada o None si hubo un error
+        """
+        try:
+            # Leer la imagen para convertir a base64
+            with open(image_path, "rb") as image_file:
+                base64_image = base64.b64encode(image_file.read()).decode('utf-8')
+            
+            # Obtener estilo y configuración
+            style_info = self._get_style_info(settings.style)
+            pixel_scale = settings.pixelSize
+            
+            # Obtener colores de la paleta
+            if palette_colors and len(palette_colors) > 0:
+                colors = palette_colors
+            else:
+                colors = self._get_palette_colors(settings.paletteId)
+            
+            color_codes = " ".join(colors)
+            
+            # Paso 1: Usar GPT-4 con visión para analizar la imagen actual
+            try:
+                logger.info(f"Analyzing image with GPT-4 Vision: {image_path}")
+                
+                # Usar la versión actual de GPT-4 con capacidades de visión
+                response_vision = self.client.chat.completions.create(
+                    model="gpt-4o", # La última versión con capacidades de visión
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text", 
+                                    "text": "Describe esta imagen de pixel art en detalle. Menciona el tema principal, estilo, colores, elementos importantes y cualquier característica destacable. Sé muy específico."
+                                },
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": f"data:image/png;base64,{base64_image}"}
+                                }
+                            ]
+                        }
+                    ],
+                    max_tokens=500
+                )
+                
+                # Obtener la descripción de la imagen actual
+                image_description = response_vision.choices[0].message.content
+                logger.info(f"Image analysis complete. Description length: {len(image_description)}")
+                
+            except Exception as vision_error:
+                logger.warning(f"GPT-4 Vision analysis failed: {str(vision_error)}, using simplified approach")
+                # Crear una descripción genérica si la visión falla
+                image_description = f"a pixel art image in {style_info} style with {pixel_scale}x{pixel_scale} pixel blocks"
+            
+            # Paso 2: Crear un prompt combinado para DALL-E 3
+            detailed_prompt = (
+                f"Based on the following detailed analysis, recreate the original pixel art image exactly: {image_description}. "
+                f"Then, apply this specific modification without altering any other elements: {prompt}. "
+                f"Ensure that the final image is almost identical to the original in composition, style, and elements, "
+                f"maintaining the exact {style_info} pixel art style with {pixel_scale}x{pixel_scale} pixel blocks. "
+                f"Use exclusively these colors: {color_codes}. "
+                f"The only change should be the one described (e.g., adding a title 'los cabos'). "
+                f"Do not alter any details other than the requested modification."
+            )
+            
+            logger.info(f"Generating modified image with DALL-E 3 using prompt: {detailed_prompt[:100]}...")
+            
+            # Paso 3: Generar la imagen actualizada con DALL-E 3
+            response = self.client.images.generate(
+                model="dall-e-3",
+                prompt=detailed_prompt,
+                size="1024x1024",
+                quality="hd",  # Usar calidad HD para más detalle
+                n=1,
+            )
+            
+            processed_url = response.data[0].url
+            logger.info("Successfully generated updated image with DALL-E 3")
+            
+            # Descargar imagen procesada
+            image_data = httpx.get(processed_url).content
+            
+            # Guardar localmente
+            timestamp = int(time.time())
+            processed_filename = f"updated_{timestamp}.png"
+            processed_path = os.path.join(app_settings.RESULTS_FOLDER, processed_filename)
+            
+            with open(processed_path, "wb") as f:
+                f.write(image_data)
+            
+            # Preparar resultado
+            result = {
+                "image_url": f"/images/results/{processed_filename}",
+                "thumbnail_url": f"/images/results/{processed_filename}",
+                "width": 1024,
+                "height": 1024,
+                "local_path": processed_path
+            }
+            
+            return result
+                
+        except Exception as e:
+            logger.error(f"Error updating image: {str(e)}")
+            return None

@@ -1,9 +1,12 @@
+#app/api/routes/pixel_art_mongo.py
 import os
 import uuid
+import httpx
 import shutil
-from typing import List, Optional
+from datetime import datetime
+from typing import List, Optional, Dict
 from venv import logger
-from fastapi import APIRouter, Depends, File, Form, UploadFile, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, Form, UploadFile, HTTPException, Query, Request, Body
 from app.models.pixel_art import (
     PixelArt, PixelArtCreate, PixelArtList, 
     PixelArtPromptRequest, PixelArtProcessSettings
@@ -50,6 +53,7 @@ def get_pixel_art(
     if not pixel_art:
         raise HTTPException(status_code=404, detail="Pixel art not found")
     return pixel_art
+
 
 # Crear un nuevo pixel art desde un prompt
 @router.post("/generate-from-prompt", response_model=PixelArt)
@@ -106,14 +110,17 @@ async def process_image(
     sharpness: int = Form(70),
     backgroundType: str = Form("transparent"),
     animationType: str = Form("none"),
+    prompt: Optional[str] = Form(None),  # Nuevo campo para prompt
     tags: str = Form(""),
     image_processing_service: ImageProcessingService = Depends(get_image_processing_service),
     pixel_art_service: PixelArtMongoService = Depends(get_pixel_art_mongo_service),
     palette_service: PaletteMongoService = Depends(get_palette_mongo_service),
+    openai_service: OpenAIService = Depends(get_openai_service),
     cloudinary_service: CloudinaryService = Depends(get_cloudinary_service)
 ):
     """
     Procesa una imagen subida para convertirla en pixel art.
+    Si se proporciona un prompt, se utilizará para mejorar o modificar la imagen con IA.
     """
     # Validar el formato de la imagen
     valid_formats = [".jpg", ".jpeg", ".png", ".webp"]
@@ -158,7 +165,7 @@ async def process_image(
         
         logger.info(f"Created process settings: {process_settings}")
         
-        # Procesar la imagen
+        # Primero procesar la imagen localmente para convertirla a pixel art
         processed_image_data = image_processing_service.process_image(
             temp_file_path, 
             process_settings,
@@ -169,16 +176,29 @@ async def process_image(
             logger.error("Failed to process image: No data returned from image processing service")
             raise HTTPException(status_code=500, detail="Failed to process image")
         
-        # Si estamos usando OpenAI para procesamiento avanzado
-        openai_service = OpenAIService()
-        advanced_processed = await openai_service.process_image(
-            temp_file_path,
-            process_settings,
-            palette["colors"]
-        )
-        
-        # Usar el resultado de OpenAI si está disponible, sino usar el procesamiento local
-        image_data = advanced_processed if advanced_processed else processed_image_data
+        # Comprobar si hay un prompt y debe aplicarse procesamiento adicional con OpenAI
+        final_image_data = processed_image_data
+        if prompt:
+            # Si hay un prompt, intentar procesar con OpenAI
+            logger.info(f"Applying additional processing with prompt: {prompt}")
+            
+            try:
+                # Usar el resultado del procesamiento local como entrada para OpenAI
+                openai_processed = await openai_service.update_image(
+                    processed_image_data["local_path"],  # Usar el archivo pixelado como base
+                    prompt,
+                    process_settings,
+                    palette["colors"]
+                )
+                
+                if openai_processed:
+                    final_image_data = openai_processed
+                    logger.info("Successfully applied OpenAI processing with prompt")
+                else:
+                    logger.warning("OpenAI processing failed, using basic pixel processing")
+            except Exception as openai_err:
+                logger.error(f"Error in OpenAI processing: {str(openai_err)}")
+                # Continuamos con la imagen procesada localmente
         
         # Preparar datos para crear el pixel art
         tag_list = [tag.strip() for tag in tags.split(",")] if tags else []
@@ -195,9 +215,14 @@ async def process_image(
         # Crear el registro en la base de datos con soporte para Cloudinary
         pixel_art = pixel_art_service.create_pixel_art(
             pixel_art_data, 
-            image_data, 
+            final_image_data, 
             cloudinary_service if settings.USE_CLOUDINARY else None
         )
+        
+        # Añadir el prompt al registro si existía
+        if prompt:
+            pixel_art_service.update_pixel_art(pixel_art["id"], {"prompt": prompt})
+            pixel_art["prompt"] = prompt
         
         return pixel_art
         
@@ -222,58 +247,151 @@ async def process_image(
 
 # Actualizar un pixel art
 @router.put("/{pixel_art_id}", response_model=PixelArt)
-def update_pixel_art(
+async def update_pixel_art(
     pixel_art_id: str,
-    pixel_art_update: dict,
-    pixel_art_service: PixelArtMongoService = Depends(get_pixel_art_mongo_service)
-):
-    """
-    Actualiza un pixel art existente.
-    """
-    updated_pixel_art = pixel_art_service.update_pixel_art(pixel_art_id, pixel_art_update)
-    if not updated_pixel_art:
-        raise HTTPException(status_code=404, detail="Pixel art not found")
-    return updated_pixel_art
-
-# Eliminar un pixel art
-@router.delete("/{pixel_art_id}")
-def delete_pixel_art(
-    pixel_art_id: str,
+    pixel_art_update: Dict = Body(...),
+    prompt: Optional[str] = Body(None),
+    apply_changes_to_image: bool = Body(False),
+    openai_service: OpenAIService = Depends(get_openai_service),
     pixel_art_service: PixelArtMongoService = Depends(get_pixel_art_mongo_service),
+    palette_service: PaletteMongoService = Depends(get_palette_mongo_service),
+    image_processing_service: ImageProcessingService = Depends(get_image_processing_service),
     cloudinary_service: CloudinaryService = Depends(get_cloudinary_service)
 ):
     """
-    Elimina un pixel art existente.
+    Actualiza un pixel art existente.
+    
+    Si apply_changes_to_image es True, generará una nueva versión de la imagen
+    aplicando las modificaciones solicitadas usando OpenAI.
     """
-    success = pixel_art_service.delete_pixel_art(
-        pixel_art_id, 
-        cloudinary_service if settings.USE_CLOUDINARY else None
-    )
-    if not success:
+    # Verificar que el pixel art existe
+    existing_pixel_art = pixel_art_service.get_pixel_art_by_id(pixel_art_id)
+    if not existing_pixel_art:
         raise HTTPException(status_code=404, detail="Pixel art not found")
-    return {"message": "Pixel art deleted successfully"}
-
-# Búsqueda avanzada de pixel arts
-@router.get("/search/", response_model=PixelArtList)
-def search_pixel_arts(
-    tags: Optional[List[str]] = Query(None),
-    style: Optional[str] = Query(None),
-    palette_id: Optional[str] = Query(None),
-    search_term: Optional[str] = Query(None),
-    skip: int = 0,
-    limit: int = 100,
-    pixel_art_service: PixelArtMongoService = Depends(get_pixel_art_mongo_service)
-):
-    """
-    Busca pixel arts con diversos filtros.
-    """
-    result = pixel_art_service.search_pixel_arts(
-        tags=tags,
-        style=style,
-        palette_id=palette_id,
-        search_term=search_term,
-        skip=skip,
-        limit=limit
+    
+    # Si no se solicita aplicar cambios a la imagen, simplemente actualizar los metadatos
+    if not apply_changes_to_image:
+        updated_pixel_art = pixel_art_service.update_pixel_art(pixel_art_id, pixel_art_update)
+        return updated_pixel_art
+    
+    # Si se solicita aplicar cambios a la imagen, procesar con OpenAI
+    if not prompt:
+        raise HTTPException(
+            status_code=400, 
+            detail="Se requiere un prompt para aplicar cambios a la imagen"
+        )
+    
+    # Obtener la paleta
+    palette_id = pixel_art_update.get("paletteId", existing_pixel_art.get("paletteId"))
+    palette = palette_service.get_palette_by_id(palette_id)
+    if not palette:
+        raise HTTPException(status_code=404, detail=f"Palette with id {palette_id} not found")
+    
+    # Crear configuración de procesamiento
+    process_settings = PixelArtProcessSettings(
+        pixelSize=pixel_art_update.get("pixelSize", existing_pixel_art.get("pixelSize", 8)),
+        style=pixel_art_update.get("style", existing_pixel_art.get("style", "retro")),
+        paletteId=palette_id,
+        contrast=pixel_art_update.get("contrast", 50),
+        sharpness=pixel_art_update.get("sharpness", 70),
+        backgroundType=pixel_art_update.get("backgroundType", existing_pixel_art.get("backgroundType", "transparent")),
+        animationType=pixel_art_update.get("animationType", existing_pixel_art.get("animationType", "none"))
     )
     
-    return result
+    # Construir la ruta de la imagen actual
+    image_url = existing_pixel_art.get("imageUrl", "")
+    local_image_path = None
+    
+    # Si la imagen está en Cloudinary o es una URL externa, descargarla primero
+    if image_url.startswith(("http://", "https://")):
+        try:
+            # Descargar la imagen de Cloudinary
+            local_image_path = os.path.join(
+                settings.UPLOAD_FOLDER, 
+                f"temp_{uuid.uuid4()}.png"
+            )
+            response = httpx.get(image_url)
+            with open(local_image_path, "wb") as f:
+                f.write(response.content)
+        except Exception as e:
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Error descargando la imagen de Cloudinary: {str(e)}"
+            )
+    else:
+        # Convertir la URL relativa a una ruta local absoluta
+        filename = os.path.basename(image_url)
+        local_image_path = os.path.join(settings.RESULTS_FOLDER, filename)
+        
+        if not os.path.exists(local_image_path):
+            raise HTTPException(
+                status_code=404, 
+                detail="No se encontró la imagen local para aplicar cambios"
+            )
+    
+    try:
+        # Procesar la imagen con OpenAI
+        processed_image_data = await openai_service.update_image(
+            local_image_path,
+            prompt,
+            process_settings,
+            palette["colors"]
+        )
+        
+        if not processed_image_data:
+            raise HTTPException(
+                status_code=500, 
+                detail="Error al procesar la imagen con OpenAI"
+            )
+        
+        # Guardar la versión anterior en el historial
+        version_history = existing_pixel_art.get("versionHistory", [])
+        version_entry = {
+            "timestamp": datetime.now().isoformat(),
+            "imageUrl": existing_pixel_art["imageUrl"],
+            "thumbnailUrl": existing_pixel_art["thumbnailUrl"],
+            "prompt": existing_pixel_art.get("prompt", ""),
+            "changes": pixel_art_update
+        }
+        
+        # Limitar historial a 5 versiones como máximo
+        if len(version_history) >= 5:
+            version_history = version_history[-4:] # Mantener solo las 4 más recientes
+        
+        version_history.append(version_entry)
+        
+        # Actualizar el pixel art con la nueva imagen y metadatos
+        update_data = pixel_art_update.copy()
+        update_data.update({
+            "imageUrl": processed_image_data["image_url"],
+            "thumbnailUrl": processed_image_data["thumbnail_url"],
+            "width": processed_image_data["width"],
+            "height": processed_image_data["height"],
+            "prompt": prompt,
+            "versionHistory": version_history,
+            "updatedAt": datetime.now()
+        })
+        
+        # Crear el registro actualizado en la base de datos con soporte para Cloudinary
+        updated_pixel_art = pixel_art_service.update_pixel_art_with_image(
+            pixel_art_id, 
+            update_data, 
+            processed_image_data,
+            cloudinary_service if settings.USE_CLOUDINARY else None
+        )
+        
+        return updated_pixel_art
+    
+    except Exception as e:
+        logger.error(f"Error updating pixel art image: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        
+        # Limpiar archivos temporales
+        if local_image_path and "temp_" in local_image_path and os.path.exists(local_image_path):
+            try:
+                os.remove(local_image_path)
+            except:
+                pass
+        
+        raise HTTPException(status_code=500, detail=f"Error updating pixel art: {str(e)}")
