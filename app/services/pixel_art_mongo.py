@@ -74,6 +74,8 @@ class PixelArtMongoService:
         
         return pixel_art
     
+# Modificar el método create_pixel_art en pixel_art_mongo.py para inicializar el historial de versiones
+
     @staticmethod
     def create_pixel_art(
         pixel_art: PixelArtCreate, 
@@ -141,6 +143,9 @@ class PixelArtMongoService:
         now = datetime.now()
         pixel_art_id = str(uuid.uuid4())
         
+        # Inicializar el historial de versiones con la versión inicial
+        version_history = []
+        
         pixel_art_doc = {
             "id": pixel_art_id,
             "name": pixel_art.name,
@@ -157,7 +162,8 @@ class PixelArtMongoService:
             "tags": pixel_art.tags or [],
             "description": None,
             "createdAt": now,
-            "updatedAt": now
+            "updatedAt": now,
+            "versionHistory": version_history  # Iniciamos con un arreglo vacío, la primera versión es la actual
         }
         
         # Añadir el ID de Cloudinary si está disponible

@@ -110,7 +110,7 @@ async def process_image(
     sharpness: int = Form(70),
     backgroundType: str = Form("transparent"),
     animationType: str = Form("none"),
-    prompt: Optional[str] = Form(None),  # Nuevo campo para prompt
+    prompt: Optional[str] = Form(None),  # Prompt opcional
     tags: str = Form(""),
     image_processing_service: ImageProcessingService = Depends(get_image_processing_service),
     pixel_art_service: PixelArtMongoService = Depends(get_pixel_art_mongo_service),
@@ -165,40 +165,39 @@ async def process_image(
         
         logger.info(f"Created process settings: {process_settings}")
         
-        # Primero procesar la imagen localmente para convertirla a pixel art
-        processed_image_data = image_processing_service.process_image(
-            temp_file_path, 
-            process_settings,
-            palette["colors"]
-        )
+        # Determinar flujo de procesamiento basado en la presencia del prompt
+        final_image_data = None
         
-        if not processed_image_data:
-            logger.error("Failed to process image: No data returned from image processing service")
-            raise HTTPException(status_code=500, detail="Failed to process image")
-        
-        # Comprobar si hay un prompt y debe aplicarse procesamiento adicional con OpenAI
-        final_image_data = processed_image_data
         if prompt:
-            # Si hay un prompt, intentar procesar con OpenAI
-            logger.info(f"Applying additional processing with prompt: {prompt}")
+            # Si hay un prompt, procesamos directamente con OpenAI usando la función mejorada
+            logger.info(f"Processing image with prompt: {prompt}")
+            final_image_data = await openai_service.process_image(
+                temp_file_path,  # Ruta de la imagen original
+                process_settings,
+                palette["colors"],
+                prompt  # Pasamos el prompt a la función mejorada
+            )
             
-            try:
-                # Usar el resultado del procesamiento local como entrada para OpenAI
-                openai_processed = await openai_service.update_image(
-                    processed_image_data["local_path"],  # Usar el archivo pixelado como base
-                    prompt,
+            if not final_image_data:
+                logger.warning("OpenAI processing failed, falling back to basic processing")
+                # Si falla OpenAI, usamos el procesamiento básico
+                final_image_data = image_processing_service.process_image(
+                    temp_file_path, 
                     process_settings,
                     palette["colors"]
                 )
-                
-                if openai_processed:
-                    final_image_data = openai_processed
-                    logger.info("Successfully applied OpenAI processing with prompt")
-                else:
-                    logger.warning("OpenAI processing failed, using basic pixel processing")
-            except Exception as openai_err:
-                logger.error(f"Error in OpenAI processing: {str(openai_err)}")
-                # Continuamos con la imagen procesada localmente
+        else:
+            # Sin prompt, usamos el procesamiento básico
+            logger.info("Processing image without prompt")
+            final_image_data = image_processing_service.process_image(
+                temp_file_path, 
+                process_settings,
+                palette["colors"]
+            )
+        
+        if not final_image_data:
+            logger.error("Failed to process image: No data returned from processing")
+            raise HTTPException(status_code=500, detail="Failed to process image")
         
         # Preparar datos para crear el pixel art
         tag_list = [tag.strip() for tag in tags.split(",")] if tags else []
@@ -219,11 +218,23 @@ async def process_image(
             cloudinary_service if settings.USE_CLOUDINARY else None
         )
         
-        # Añadir el prompt al registro si existía
+        # Añadir el prompt al registro si existe
         if prompt:
-            pixel_art_service.update_pixel_art(pixel_art["id"], {"prompt": prompt})
-            pixel_art["prompt"] = prompt
-        
+            # Guardar el prompt directamente en el pixel art en lugar de hacerlo en dos pasos
+            update_data = {
+                "prompt": prompt
+            }
+            
+            # Inicializar el historial de versiones vacío si no existe
+            if "versionHistory" not in pixel_art or not pixel_art["versionHistory"]:
+                update_data["versionHistory"] = []
+            
+            # Actualizar el pixel art con el prompt
+            updated_pixel_art = pixel_art_service.update_pixel_art(pixel_art["id"], update_data)
+            if updated_pixel_art:
+                pixel_art = updated_pixel_art
+                logger.info(f"Added prompt and initialized version history for pixel art {pixel_art['id']}")
+
         return pixel_art
         
     except Exception as e:
@@ -346,6 +357,12 @@ async def update_pixel_art(
         
         # Guardar la versión anterior en el historial
         version_history = existing_pixel_art.get("versionHistory", [])
+        # Si no existe el historial, inicializarlo
+        if version_history is None:
+            version_history = []
+            logger.info(f"Initializing version history for pixel art {pixel_art_id}")
+        
+        # Crear entrada para la versión actual (que pasará a ser una versión anterior)
         version_entry = {
             "timestamp": datetime.now().isoformat(),
             "imageUrl": existing_pixel_art["imageUrl"],
@@ -359,7 +376,7 @@ async def update_pixel_art(
             version_history = version_history[-4:] # Mantener solo las 4 más recientes
         
         version_history.append(version_entry)
-        
+        logger.info(f"Added version to history, now has {len(version_history)} versions")
         # Actualizar el pixel art con la nueva imagen y metadatos
         update_data = pixel_art_update.copy()
         update_data.update({
@@ -371,6 +388,7 @@ async def update_pixel_art(
             "versionHistory": version_history,
             "updatedAt": datetime.now()
         })
+        logger.info(f"Updating pixel art with new data including version history")
         
         # Crear el registro actualizado en la base de datos con soporte para Cloudinary
         updated_pixel_art = pixel_art_service.update_pixel_art_with_image(

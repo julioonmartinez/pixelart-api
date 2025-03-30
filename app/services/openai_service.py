@@ -148,22 +148,25 @@ class OpenAIService:
         }
         return background_info.get(background_type, "simple")
     
-    async def process_image(self, image_path: str, settings: PixelArtProcessSettings, palette_colors: list = None) -> Optional[Dict]:
+    async def process_image(self, image_path: str, settings: PixelArtProcessSettings, palette_colors: list = None, user_prompt: str = None) -> Optional[Dict]:
         """
-        Procesa una imagen existente para convertirla en pixel art.
+        Procesa una imagen existente para convertirla en pixel art, utilizando GPT-4o para
+        análisis de la imagen y generación de prompts mejorados para DALL-E 3.
         
         Args:
             image_path: Ruta local de la imagen a procesar
             settings: Configuración de procesamiento para el pixel art
             palette_colors: Lista opcional de colores de la paleta a usar
-            
+            user_prompt: Prompt opcional del usuario para guiar la transformación
+                
         Returns:
             Diccionario con los datos de la imagen procesada o None si hubo un error
         """
         try:
-            # Leer la imagen
+            # Leer la imagen para análisis
             with open(image_path, "rb") as image_file:
-                base64_image = base64.b64encode(image_file.read()).decode('utf-8')
+                image_bytes = image_file.read()
+                base64_image = base64.b64encode(image_bytes).decode('utf-8')
             
             # Obtener estilo y configuración
             style_info = self._get_style_info(settings.style)
@@ -177,33 +180,106 @@ class OpenAIService:
             
             color_codes = " ".join(colors)
             
-            # Crear un prompt simplificado
-            prompt = f"Transform this image into a {style_info} pixel art with {pixel_scale}x{pixel_scale} pixel blocks. Colors to use: {color_codes}. Faithfully preserve the original subject but in pixel art style. No text, no UI elements."
-            
-            # Procesamiento
+            # Paso 1: Analizar la imagen original con GPT-4o
             try:
-                # Usar DALL-E 3
+                logger.info(f"Analyzing original image with GPT-4o: {image_path}")
+                
+                analysis_prompt = """
+                Analiza esta imagen con detalle y proporciona una descripción completa.
+                Identifica:
+                1. El tema o sujeto principal
+                2. Los objetos y personajes presentes
+                3. El escenario o ubicación
+                4. Los colores dominantes
+                5. El estilo artístico
+                6. La composición y distribución espacial
+                7. El ambiente o mood general
+                
+                Tu análisis será usado para transformar esta imagen en pixel art, así que incluye detalles
+                que serían importantes preservar en esa transformación.
+                """
+                
+                response_vision = self.client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text", 
+                                    "text": analysis_prompt
+                                },
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": f"data:image/png;base64,{base64_image}"}
+                                }
+                            ]
+                        }
+                    ],
+                    max_tokens=800
+                )
+                
+                # Obtener el análisis de la imagen
+                image_analysis = response_vision.choices[0].message.content
+                logger.info(f"Image analysis complete. Description length: {len(image_analysis)}")
+                
+            except Exception as vision_error:
+                logger.warning(f"GPT-4o analysis failed: {str(vision_error)}, using simplified approach")
+                # Crear una descripción genérica si la visión falla
+                image_analysis = "an image to be transformed into pixel art"
+            
+            # Paso 2: Crear un prompt optimizado para DALL-E 3, incorporando el análisis y el prompt del usuario
+            if user_prompt:
+                # Si hay un prompt del usuario, incluirlo en las instrucciones
+                detailed_prompt = (
+                    f"Transform this image into a {style_info} pixel art based on this detailed analysis: {image_analysis}. "
+                    f"Follow these specific stylistic directions from the user: {user_prompt}. "
+                    f"Use the exact {style_info} pixel art style with precise {pixel_scale}x{pixel_scale} pixel blocks. "
+                    f"Use exclusively these colors in your palette: {color_codes}. "
+                    f"Maintain the key elements and composition from the original image while adapting them to genuine pixel art aesthetic. "
+                    f"Ensure the final image has a distinctive pixel art look with clean, defined pixel blocks. "
+                    f"No anti-aliasing or blurring between pixels."
+                )
+            else:
+                # Si no hay prompt del usuario, centrarse en la transformación fiel
+                detailed_prompt = (
+                    f"Transform this image into authentic {style_info} pixel art based on this detailed analysis: {image_analysis}. "
+                    f"Create with precise {pixel_scale}x{pixel_scale} pixel blocks. "
+                    f"Use exclusively these colors in your palette: {color_codes}. "
+                    f"Maintain the key elements and composition from the original image while adapting them to genuine pixel art aesthetic. "
+                    f"The pixel art should have clean, defined pixel blocks with no anti-aliasing or blurring between pixels. "
+                    f"Respect the original composition but enhance it with classic pixel art techniques appropriate for {style_info}."
+                )
+            
+            logger.info(f"Generating pixel art with DALL-E 3 using prompt: {detailed_prompt[:150]}...")
+            
+            # Paso 3: Generar la imagen con DALL-E 3
+            try:
                 response = self.client.images.generate(
                     model="dall-e-3",
-                    prompt=prompt,
+                    prompt=detailed_prompt,
                     size="1024x1024",
                     quality="standard",
                     n=1,
                 )
                 
                 processed_url = response.data[0].url
+                logger.info("Successfully generated pixel art with DALL-E 3")
                 
-            except Exception as inner_e:
-                logger.warning(f"DALL-E 3 generation failed, trying image variation: {str(inner_e)}")
-                
-                # Alternativa: variación de imagen
-                response = self.client.images.create_variation(
-                    image=open(image_path, "rb"),
-                    n=1,
-                    size="1024x1024"
-                )
-                
-                processed_url = response.data[0].url
+            except Exception as dalle_error:
+                logger.error(f"DALL-E 3 generation failed: {str(dalle_error)}")
+                # Si falla DALL-E 3, intentar con imagen de variación como último recurso
+                try:
+                    logger.warning("Falling back to image variation as last resort")
+                    response = self.client.images.create_variation(
+                        image=open(image_path, "rb"),
+                        n=1,
+                        size="1024x1024"
+                    )
+                    processed_url = response.data[0].url
+                except Exception as variation_error:
+                    logger.error(f"Image variation also failed: {str(variation_error)}")
+                    return None
             
             # Descargar imagen procesada
             image_data = httpx.get(processed_url).content

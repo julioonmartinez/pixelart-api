@@ -6,16 +6,20 @@ API backend para la generación y procesamiento de arte en píxeles utilizando i
 
 - Generación de pixel art a partir de prompts de texto usando OpenAI DALL-E
 - Procesamiento de imágenes para convertirlas en pixel art
+- **¡NUEVO!** Modificación inteligente de imágenes existentes con prompts específicos
+- **¡NUEVO!** Historial de versiones para seguir la evolución de tus creaciones
 - Gestión de paletas de colores
 - Configuración personalizada para el tamaño de píxel, estilo, fondo y más
 - API RESTful construida con FastAPI
-- **¡NUEVO!** Soporte para MongoDB para una mejor persistencia de datos
-- **¡NUEVO!** Despliegue con Docker para facilitar la instalación y ejecución
+- Soporte para MongoDB para una mejor persistencia de datos
+- Despliegue con Docker para facilitar la instalación y ejecución
 
 ## Requisitos previos
 
 - Python 3.9+
-- Una clave API de OpenAI
+- Una clave API de OpenAI con acceso a:
+  - DALL-E 3 para generación de imágenes
+  - GPT-4o para análisis de imágenes
 - Docker y Docker Compose (para instalación con Docker)
 - MongoDB (opcional, se puede usar con Docker)
 
@@ -129,6 +133,7 @@ pixelart-api/
 │   ├── services/                # Lógica de negocio
 │   │   ├── pixel_art.py         # Servicio SQLite
 │   │   ├── pixel_art_mongo.py   # Servicio MongoDB
+│   │   ├── openai_service.py    # Interacción con OpenAI
 │   │   └── ...
 │   ├── api/                     # Rutas de la API
 │   │   ├── routes/              # Controladores de rutas
@@ -150,16 +155,89 @@ pixelart-api/
 - **POST /api/pixel-arts/process-image**: Procesa una imagen para convertirla en pixel art
 - **GET /api/palettes/**: Lista todas las paletas disponibles
 
-### MongoDB (Nuevo)
+### MongoDB (Recomendado)
 - **GET /api/mongo/pixel-arts/**: Lista todos los pixel arts (MongoDB)
 - **POST /api/mongo/pixel-arts/generate-from-prompt**: Genera pixel art usando MongoDB
-- **POST /api/mongo/pixel-arts/process-image**: Procesa una imagen usando MongoDB
+- **POST /api/mongo/pixel-arts/process-image**: Procesa una imagen usando MongoDB (ahora soporta prompt opcional)
+- **PUT /api/mongo/pixel-arts/{id}**: Actualiza un pixel art existente, con opción para modificar la imagen con IA
 - **GET /api/mongo/pixel-arts/search/**: Búsqueda avanzada (solo MongoDB)
 
 ### Migración
 - **POST /api/migration/migrate-to-mongodb**: Migra todos los datos de SQLite a MongoDB
 - **POST /api/migration/migrate-palettes**: Migra solo las paletas
 - **POST /api/migration/migrate-pixel-arts**: Migra solo los pixel arts
+
+## Nuevas Funcionalidades
+
+### Modificación de imágenes con prompts
+
+Ahora puedes modificar imágenes existentes enviando un prompt que describa los cambios deseados:
+
+```http
+PUT /api/mongo/pixel-arts/{id}
+Content-Type: application/json
+
+{
+  "pixel_art_update": {
+    "pixelSize": 8,
+    "style": "retro",
+    "backgroundType": "transparent",
+    "paletteId": "gameboy"
+  },
+  "prompt": "Añadir un título que diga 'Los Cabos'",
+  "apply_changes_to_image": true
+}
+```
+
+El sistema:
+1. Analiza la imagen original con GPT-4o
+2. Detecta el tipo de modificación solicitada
+3. Aplica los cambios específicos manteniendo el resto de la imagen intacta
+4. Guarda la versión anterior en el historial
+
+### Historial de versiones
+
+Cada pixel art ahora mantiene un historial de sus versiones anteriores (hasta 5 versiones):
+
+```json
+{
+  "id": "abcd1234",
+  "name": "Mi playa pixel art",
+  "imageUrl": "...",
+  "versionHistory": [
+    {
+      "timestamp": "2025-03-29T22:06:54.799",
+      "imageUrl": "...",
+      "thumbnailUrl": "...",
+      "prompt": "Playa tropical",
+      "changes": { ... }
+    }
+  ]
+}
+```
+
+Esto permite a los usuarios:
+- Ver cómo ha evolucionado su creación
+- Restaurar versiones anteriores si lo desean
+- Comparar los cambios entre versiones
+
+### Procesamiento de imagen guiado por prompt
+
+Al subir una imagen para ser procesada como pixel art, ahora puedes incluir un prompt opcional:
+
+```
+POST /api/mongo/pixel-arts/process-image
+Content-Type: multipart/form-data
+
+file: [archivo_imagen.jpg]
+name: Playa tropical
+pixelSize: 8
+style: retro
+paletteId: pico8
+prompt: Una playa tropical con palmeras y agua cristalina
+```
+
+El prompt ayuda a guiar el proceso de conversión a pixel art, produciendo resultados más alineados con la visión del usuario.
 
 ## Despliegue en Producción
 
@@ -193,6 +271,8 @@ docker logs pixelart-mongo-express
 - **MongoDB no inicia**: Verifica que el puerto 27017 no esté siendo usado por otra aplicación
 - **API no se conecta a MongoDB**: Revisa la URL de conexión y asegúrate que MongoDB esté ejecutándose
 - **Error en la migración**: Verifica los logs para detalles específicos del error
+- **Error 500 al actualizar imágenes**: Asegúrate de que tu cuenta de OpenAI tenga acceso a GPT-4o y DALL-E 3
+- **Modificaciones imprecisas**: Intenta ser más específico en el prompt, describiendo exactamente qué cambios quieres realizar
 
 ## Licencia
 

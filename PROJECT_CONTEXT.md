@@ -49,6 +49,15 @@ El proyecto sigue una arquitectura de capas bien definida:
    - La imagen resultante se guarda y se registra en la base de datos.
    - Se devuelve la información al cliente.
 
+3. **Actualización de Imagen con Prompt**:
+   - Cliente envía prompt de modificación a `/api/mongo/pixel-arts/{id}` con `apply_changes_to_image=true`.
+   - Controller valida la solicitud y obtiene la imagen existente.
+   - `OpenAIService.update_image` analiza la imagen actual con GPT-4o y aplica los cambios solicitados.
+   - La función categoriza el tipo de modificación (añadir texto, cambiar colores, añadir elementos, etc.).
+   - Genera un prompt especializado según el tipo de modificación.
+   - La nueva versión se guarda conservando la versión anterior en el historial.
+   - Se devuelve la información actualizada al cliente.
+
 ## Decisiones de Diseño Clave
 
 ### 1. Migración de SQLite a MongoDB
@@ -88,6 +97,32 @@ El proyecto sigue una arquitectura de capas bien definida:
 - **Multi-container**: Separación de API, MongoDB y mongo-express.
 - **Volúmenes persistentes**: Para datos de MongoDB e imágenes.
 - **Healthchecks**: Para asegurar el correcto arranque de servicios dependientes.
+
+### 4. Sistema de Historial de Versiones
+
+**Motivación**:
+- **Seguimiento de cambios**: Permitir a los usuarios ver la evolución de sus creaciones.
+- **Recuperación de versiones**: Posibilidad de revertir a estados anteriores.
+- **Comparación visual**: Facilitar la comparación entre diferentes iteraciones.
+
+**Implementación**:
+- **Estructura de datos anidada**: Cada documento de pixel art tiene un array `versionHistory`.
+- **Metadatos completos**: Cada versión almacena URLs de imagen, timestamp, prompt utilizado y cambios aplicados.
+- **Preservación de recursos**: Las imágenes de versiones anteriores no se eliminan automáticamente.
+- **Límite de versiones**: Se mantiene un máximo de 5 versiones por imagen para optimizar espacio.
+
+### 5. Procesamiento Inteligente de Prompts
+
+**Motivación**:
+- **Precisión en las modificaciones**: Lograr que los cambios solicitados se apliquen exactamente como se solicitan.
+- **Preservación de elementos**: Mantener intactos los elementos que no deben modificarse.
+- **Experiencia de usuario mejorada**: Resultados predecibles que corresponden con las expectativas del usuario.
+
+**Implementación**:
+- **Categorización de prompts**: Detección automática del tipo de modificación solicitada.
+- **Prompts especializados**: Construcción de prompts optimizados según el tipo de cambio.
+- **Análisis avanzado de imágenes**: Uso de GPT-4o para describir detalladamente la imagen existente.
+- **Instrucciones enfáticas**: Prompts que claramente especifican qué debe cambiarse y qué debe mantenerse.
 
 ## Patrones de Código y Convenciones
 
@@ -204,14 +239,45 @@ contrast: 50
 sharpness: 70
 backgroundType: transparent
 animationType: none
-tags: gato, ninja, divertido
+prompt: Una playa tropical con palmeras
+tags: playa, tropical, pixelart
 ```
 
 **Flujo interno**:
 1. La imagen se guarda temporalmente.
 2. Se aplica pixelación y procesamiento con `image_processing_service.py`.
 3. Opcionalmente, se mejora con IA usando `openai_service.py:process_image`.
-4. La imagen resultante se guarda y registra en MongoDB.
+4. Si se proporciona un prompt, se utiliza para guiar el procesamiento.
+5. La imagen resultante se guarda y registra en MongoDB.
+
+### 3. Actualizar un Pixel Art con Prompt
+
+**Solicitud API**:
+```http
+PUT /api/mongo/pixel-arts/abcd1234-5678
+Content-Type: application/json
+
+{
+  "pixel_art_update": {
+    "pixelSize": 8,
+    "style": "retro",
+    "backgroundType": "transparent",
+    "paletteId": "gameboy"
+  },
+  "prompt": "Añadir un título que diga 'Los Cabos'",
+  "apply_changes_to_image": true
+}
+```
+
+**Flujo interno**:
+1. La solicitud es validada y se obtiene la imagen existente.
+2. La imagen se descarga si está en Cloudinary.
+3. GPT-4o analiza y describe detalladamente la imagen actual.
+4. Se categoriza el tipo de modificación (en este caso, "add_text").
+5. Se crea un prompt especializado que enfatiza mantener los elementos originales.
+6. DALL-E 3 genera una nueva versión con la modificación solicitada.
+7. La versión anterior se guarda en el historial de versiones.
+8. La nueva imagen se guarda y se actualiza el documento en MongoDB.
 
 ## Desafíos y Consideraciones Técnicas
 
@@ -242,6 +308,16 @@ tags: gato, ninja, divertido
 - Validaciones para verificar integridad de datos migrados.
 - Capacidad de ejecutar ambos sistemas en paralelo.
 
+### 4. Precisión en Modificaciones de Imágenes
+
+**Desafío**: Lograr que DALL-E aplique solo los cambios solicitados sin alterar el resto de la imagen.
+
+**Solución**:
+- Categorización inteligente de los tipos de prompts.
+- Prompts altamente especializados según el tipo de modificación.
+- Análisis detallado de la imagen original con GPT-4o.
+- Instrucciones explícitas sobre qué preservar y qué modificar.
+
 ## Extensibilidad y Puntos de Expansión
 
 ### Nuevas Características Planificadas
@@ -258,6 +334,11 @@ tags: gato, ninja, divertido
    - Expandir enumeración `PixelArtStyle`.
    - Implementar nuevos algoritmos en `image_processing_service.py`.
 
+4. **Categorización avanzada de prompts**:
+   - Expandir los tipos de modificaciones detectables.
+   - Implementar nuevos generadores de prompts especializados.
+   - Mejorar la detección de intención del usuario.
+
 ### Puntos de Integración
 
 1. **Autenticación**: Preparado para integrar con:
@@ -270,75 +351,75 @@ tags: gato, ninja, divertido
 
 ## Ejemplos de Código Clave
 
-### Generación con OpenAI
+### Sistema de Modificación Inteligente de Imágenes
 
 ```python
-def generate_from_prompt(self, prompt: str, settings: PixelArtProcessSettings) -> Optional[Dict]:
-    try:
-        # Build a comprehensive prompt that incorporates all settings
-        complete_prompt = self._build_comprehensive_prompt(prompt, settings)
-        
-        # Call OpenAI DALL-E 3 API
-        response = self.client.images.generate(
-            model="dall-e-3",
-            prompt=complete_prompt,
-            size="1024x1024",
-            quality="standard",
-            n=1,
-        )
-        
-        # Get the generated image URL
-        image_url = response.data[0].url
-        
-        # Download the image and save locally
-        # ...código de procesamiento...
-        
-        return result
-        
-    except Exception as e:
-        logger.error(f"Error generating image from prompt: {str(e)}")
-        return None
+def _categorize_prompt_type(self, prompt: str) -> str:
+    """
+    Categoriza el tipo de prompt para optimizar la construcción del prompt.
+    """
+    prompt_lower = prompt.lower()
+    
+    # Detectar si se trata de agregar texto
+    if any(keyword in prompt_lower for keyword in ["añadir texto", "agregar título"]):
+        return "add_text"
+    
+    # Detectar si se trata de cambiar colores
+    if any(keyword in prompt_lower for keyword in ["cambiar color", "modificar color"]):
+        return "color_change"
+    
+    # Más categorías...
+    
+    # Por defecto
+    return "general_modification"
+
+def _create_add_text_prompt(self, image_description, prompt, style_info, pixel_scale, color_codes):
+    """
+    Crea un prompt optimizado para añadir texto a una imagen.
+    """
+    return (
+        f"Reproduce exactamente esta imagen de pixel art: {image_description}. "
+        f"Agrega el siguiente texto en un estilo de fuente pixel art que combine con la imagen: {prompt}. "
+        f"El texto debe ser claramente legible e integrado armoniosamente en la composición. "
+        f"IMPORTANTE: Todos los elementos originales de la imagen deben permanecer exactamente iguales y en las mismas posiciones. "
+        # Más instrucciones...
+    )
 ```
 
-### Procesamiento de Imagen
+### Gestión del Historial de Versiones
 
 ```python
-def _apply_color_palette(self, image: Image.Image, palette_colors: List[str]) -> Image.Image:
-    """
-    Aplica una paleta de colores específica a la imagen.
-    """
-    try:
-        # Convertir colores hex a RGB
-        rgb_palette = [self._hex_to_rgb(color) for color in palette_colors]
-        
-        # Convertir la imagen a numpy array
-        img_array = np.array(image)
-        
-        # Para cada píxel, encontrar el color más cercano en la paleta
-        for y in range(height):
-            for x in range(width):
-                if a is not None and a[y, x] < 128:
-                    # Si es transparente, mantener la transparencia
-                    new_img[y, x] = [0, 0, 0, 0]
-                    continue
-                
-                pixel = [int(r[y, x]), int(g[y, x]), int(b[y, x])]
-                closest_color = self._find_closest_color(pixel, rgb_palette)
-                
-                if a is not None:
-                    new_img[y, x] = [closest_color[0], closest_color[1], closest_color[2], a[y, x]]
-                else:
-                    new_img[y, x] = closest_color
-        
-        # Convertir de vuelta a imagen PIL
-        return Image.fromarray(new_img)
-    except Exception as e:
-        logger.error(f"Error applying color palette: {str(e)}")
-        return image
+# Guardar la versión anterior en el historial
+version_history = existing_pixel_art.get("versionHistory", [])
+version_entry = {
+    "timestamp": datetime.now().isoformat(),
+    "imageUrl": existing_pixel_art["imageUrl"],
+    "thumbnailUrl": existing_pixel_art["thumbnailUrl"],
+    "prompt": existing_pixel_art.get("prompt", ""),
+    "changes": pixel_art_update
+}
+
+# Limitar historial a 5 versiones como máximo
+if len(version_history) >= 5:
+    version_history = version_history[-4:] # Mantener solo las 4 más recientes
+
+version_history.append(version_entry)
+
+# Actualizar el pixel art con la nueva imagen y metadatos
+update_data = pixel_art_update.copy()
+update_data.update({
+    "imageUrl": processed_image_data["image_url"],
+    "thumbnailUrl": processed_image_data["thumbnail_url"],
+    "prompt": prompt,
+    "versionHistory": version_history,
+    "updatedAt": datetime.now()
+})
 ```
 
 ## Conclusión
 
 Este proyecto combina múltiples tecnologías (FastAPI, OpenAI, MongoDB, Cloudinary) para crear una solución completa de generación y procesamiento de pixel art. La arquitectura está diseñada para ser modular, extensible y robusta, con consideraciones específicas para entornos cloud y escalabilidad.
 
-Las decisiones de diseño, como la migración a MongoDB y la opción de Cloudinary, están orientadas a resolver desafíos específicos de persistencia y escalabilidad, mientras que la implementación paralela facilita una transición gradual y segura.
+Las mejoras recientes en el sistema de modificación de imágenes y el historial de versiones proporcionan una experiencia más rica y precisa para los usuarios, permitiéndoles iterar sobre sus creaciones con mayor control y visibilidad de los cambios realizados.
+
+Las decisiones de diseño, como la migración a MongoDB, el uso de Cloudinary, y la implementación de prompts especializados, están orientadas a resolver desafíos específicos de persistencia, escalabilidad y precisión en las modificaciones, mientras que la implementación paralela facilita una transición gradual y segura.
